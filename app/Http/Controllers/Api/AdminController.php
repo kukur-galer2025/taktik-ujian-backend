@@ -30,6 +30,61 @@ class AdminController extends Controller
         return response()->json(['message' => 'User deleted successfully']);
     }
 
+    public function getStats()
+    {
+        $totalUsers = User::count();
+        $totalTryouts = Tryout::count();
+        $totalResults = \App\Models\UserResult::count();
+        
+        $totalRevenue = \App\Models\Order::where('status', 'confirmed')->sum('final_amount');
+        $pendingOrders = \App\Models\Order::where('status', 'pending')->count();
+
+        // Monthly revenue (last 6 months)
+        $monthlyRevenue = [];
+        for ($i = 5; $i >= 0; $i--) {
+            $date = \Carbon\Carbon::now()->subMonths($i);
+            $monthStart = $date->copy()->startOfMonth();
+            $monthEnd = $date->copy()->endOfMonth();
+            
+            $revenue = \App\Models\Order::where('status', 'confirmed')
+                ->whereBetween('created_at', [$monthStart, $monthEnd])
+                ->sum('final_amount');
+                
+            $monthlyRevenue[] = [
+                'month' => $date->translatedFormat('M Y'),
+                'revenue' => $revenue
+            ];
+        }
+
+        // Top 5 bundles
+        $topBundles = \App\Models\Bundle::withCount(['orders' => function($q) {
+            $q->where('status', 'confirmed');
+        }])->orderBy('orders_count', 'desc')->take(5)->get();
+
+        $orderStatusDistribution = [
+            'pending' => $pendingOrders,
+            'confirmed' => \App\Models\Order::where('status', 'confirmed')->count(),
+            'rejected' => \App\Models\Order::where('status', 'rejected')->count(),
+        ];
+        
+        $recentOrders = \App\Models\Order::with(['user:id,name', 'bundle:id,title', 'tryout:id,title'])
+            ->orderBy('created_at', 'desc')
+            ->take(5)
+            ->get();
+
+        return response()->json([
+            'totalUsers' => $totalUsers,
+            'totalTryouts' => $totalTryouts,
+            'totalResults' => $totalResults,
+            'totalRevenue' => $totalRevenue,
+            'pendingOrders' => $pendingOrders,
+            'monthlyRevenue' => $monthlyRevenue,
+            'topBundles' => $topBundles,
+            'orderStatusDistribution' => $orderStatusDistribution,
+            'recentOrders' => $recentOrders
+        ]);
+    }
+
     // --- TRYOUT MANAGEMENT ---
 
     public function getTryouts()
@@ -111,7 +166,7 @@ class AdminController extends Controller
 
     public function createQuestion(Request $request, $tryoutId)
     {
-        $validated = $request->validate([
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
             'type' => 'required|in:TWK,TIU,TKP',
             'sub_category' => 'nullable|string',
             'text' => 'required|string',
@@ -125,9 +180,27 @@ class AdminController extends Controller
             'score_c' => 'required|integer',
             'score_d' => 'required|integer',
             'score_e' => 'required|integer',
-            'answer_key' => 'required|in:A,B,C,D,E',
+            'answer_key' => 'nullable|in:A,B,C,D,E',
             'explanation' => 'nullable|string',
         ]);
+
+        $validator->after(function ($validator) use ($request) {
+            if ($request->type === 'TKP') {
+                $scores = [
+                    (int)$request->score_a,
+                    (int)$request->score_b,
+                    (int)$request->score_c,
+                    (int)$request->score_d,
+                    (int)$request->score_e,
+                ];
+                sort($scores);
+                if ($scores !== [1, 2, 3, 4, 5]) {
+                    $validator->errors()->add('score_a', 'Soal TKP harus memiliki poin unik 1, 2, 3, 4, 5 untuk setiap opsi.');
+                }
+            }
+        });
+
+        $validated = $validator->validate();
 
         $validated['tryout_id'] = $tryoutId;
         
@@ -138,7 +211,7 @@ class AdminController extends Controller
 
     public function updateQuestion(Request $request, $tryoutId, $questionId)
     {
-        $validated = $request->validate([
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
             'type' => 'required|in:TWK,TIU,TKP',
             'sub_category' => 'nullable|string',
             'text' => 'required|string',
@@ -152,9 +225,27 @@ class AdminController extends Controller
             'score_c' => 'required|integer',
             'score_d' => 'required|integer',
             'score_e' => 'required|integer',
-            'answer_key' => 'required|in:A,B,C,D,E',
+            'answer_key' => 'nullable|in:A,B,C,D,E',
             'explanation' => 'nullable|string',
         ]);
+
+        $validator->after(function ($validator) use ($request) {
+            if ($request->type === 'TKP') {
+                $scores = [
+                    (int)$request->score_a,
+                    (int)$request->score_b,
+                    (int)$request->score_c,
+                    (int)$request->score_d,
+                    (int)$request->score_e,
+                ];
+                sort($scores);
+                if ($scores !== [1, 2, 3, 4, 5]) {
+                    $validator->errors()->add('score_a', 'Soal TKP harus memiliki poin unik 1, 2, 3, 4, 5 untuk setiap opsi.');
+                }
+            }
+        });
+
+        $validated = $validator->validate();
 
         $question = Question::where('tryout_id', $tryoutId)->findOrFail($questionId);
         $question->update($validated);

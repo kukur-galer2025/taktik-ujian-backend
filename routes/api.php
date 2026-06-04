@@ -11,10 +11,14 @@ use App\Http\Controllers\Api\CategoryController;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+Route::get('/public/reviews', [TryoutController::class, 'getPublicReviews']);
+Route::get('/public/bundles', [\App\Http\Controllers\BundleController::class, 'index']);
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
     Route::put('/user', [AuthController::class, 'updateProfile']);
+    Route::get('/dashboard', [TryoutController::class, 'getDashboard']);
     Route::get('/user/analytics', [TryoutController::class, 'getUserAnalytics']);
     
     Route::get('/tryouts', [TryoutController::class, 'index']);
@@ -33,11 +37,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // Orders & Voucher
     Route::post('/orders', [OrderController::class, 'store']);
     Route::get('/orders/my', [OrderController::class, 'myOrders']);
+    Route::get('/orders/{id}/invoice', [OrderController::class, 'getInvoice']);
+    Route::post('/orders/{id}/reupload', [OrderController::class, 'reuploadPaymentProof']);
     Route::post('/voucher/validate', [OrderController::class, 'validateVoucher']);
     Route::get('/vouchers/available', [OrderController::class, 'getAvailableVouchers']);
 
     // Admin Routes
     Route::middleware(['is_admin'])->prefix('admin')->group(function () {
+        Route::get('/stats', [AdminController::class, 'getStats']);
+        
         Route::get('/users', [AdminController::class, 'getUsers']);
         Route::delete('/users/{id}', [AdminController::class, 'deleteUser']);
 

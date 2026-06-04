@@ -144,6 +144,14 @@ class OrderController extends Controller
         ]);
 
         $order = Order::findOrFail($id);
+        
+        // If order is rejected, refund the voucher if any
+        if ($request->status === 'rejected' && $order->status !== 'rejected') {
+            if ($order->voucher_code) {
+                Voucher::where('code', $order->voucher_code)->decrement('used_count');
+            }
+        }
+
         $order->update([
             'status' => $request->status,
             'admin_notes' => $request->admin_notes,
@@ -152,6 +160,44 @@ class OrderController extends Controller
         return response()->json([
             'message' => 'Status pesanan berhasil diperbarui.',
             'order' => $order->load(['user:id,name,email', 'bundle:id,title', 'tryout:id,title']),
+        ]);
+    }
+
+    // User: Re-upload Payment Proof for Rejected Orders
+    public function reuploadPaymentProof(Request $request, $id)
+    {
+        $order = Order::where('id', $id)
+            ->where('user_id', $request->user()->id)
+            ->firstOrFail();
+            
+        if ($order->status !== 'rejected') {
+            return response()->json(['message' => 'Hanya pesanan yang ditolak yang dapat diunggah ulang.'], 403);
+        }
+
+        $request->validate([
+            'payment_proof' => 'required|image|mimes:jpeg,png,jpg,webp|max:2048',
+        ]);
+
+        // Re-validate voucher if it exists
+        if ($order->voucher_code) {
+            $voucher = Voucher::where('code', $order->voucher_code)->first();
+            if (!$voucher || !$voucher->isValid()) {
+                return response()->json(['message' => 'Voucher sudah tidak berlaku atau limit habis. Silakan buat pesanan baru.'], 422);
+            }
+            $voucher->increment('used_count');
+        }
+
+        $path = $request->file('payment_proof')->store('payment_proofs', 'public');
+
+        $order->update([
+            'payment_proof' => '/storage/' . $path,
+            'status' => 'pending',
+            'admin_notes' => null, // clear previous notes
+        ]);
+
+        return response()->json([
+            'message' => 'Bukti pembayaran berhasil diunggah ulang. Menunggu konfirmasi admin.',
+            'order' => $order->load(['bundle', 'tryout'])
         ]);
     }
 
@@ -220,6 +266,37 @@ class OrderController extends Controller
             ->get();
 
         return response()->json($vouchers);
+    }
+    
+    // User: Get Invoice
+    public function getInvoice(Request $request, $id)
+    {
+        $order = Order::with(['user', 'bundle', 'tryout'])
+            ->where('id', $id)
+            ->where('user_id', $request->user()->id)
+            ->firstOrFail();
+            
+        if ($order->status !== 'confirmed') {
+            return response()->json(['message' => 'Invoice belum tersedia karena pesanan belum dikonfirmasi.'], 403);
+        }
+        
+        return response()->json([
+            'invoice_number' => 'INV-' . date('Ymd', strtotime($order->created_at)) . '-' . str_pad($order->id, 5, '0', STR_PAD_LEFT),
+            'date' => $order->created_at->format('Y-m-d H:i:s'),
+            'user' => [
+                'name' => $order->user->name,
+                'email' => $order->user->email,
+            ],
+            'item' => [
+                'name' => $order->bundle ? $order->bundle->title : ($order->tryout ? $order->tryout->title : 'Paket Ujian'),
+                'type' => $order->bundle ? 'Bundle' : 'Tryout',
+                'price' => $order->amount,
+            ],
+            'discount' => $order->discount,
+            'voucher_code' => $order->voucher_code,
+            'total' => $order->final_amount,
+            'status' => 'LUNAS'
+        ]);
     }
 }
 

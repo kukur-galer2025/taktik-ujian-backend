@@ -12,4 +12,9 @@ class Bundle extends Model
     {
         return $this->belongsToMany(Tryout::class);
     }
+
+    public function orders()
+    {
+        return $this->hasMany(Order::class);
+    }
 }

@@ -12,11 +12,8 @@ class TryoutController extends Controller
 {
     public function index(Request $request)
     {
-        $tryouts = Tryout::with('category')->withCount(['reviews', 'questions',
-            'questions as twk_count' => function ($q) { $q->where('type', 'TWK'); },
-            'questions as tiu_count' => function ($q) { $q->where('type', 'TIU'); },
-            'questions as tkp_count' => function ($q) { $q->where('type', 'TKP'); },
-        ])
+        $tryouts = Tryout::with('category')
+            ->withCount(['reviews', 'questions'])
             ->withAvg('reviews', 'rating')
             ->get();
             
@@ -163,6 +160,8 @@ class TryoutController extends Controller
             'answers' => $request->answers,
         ]);
 
+        \Illuminate\Support\Facades\Cache::forget("user_analytics_{$request->user()->id}");
+
         return response()->json([
             'message' => 'Tryout submitted successfully',
             'result' => $result
@@ -190,13 +189,19 @@ class TryoutController extends Controller
 
     public function getLeaderboard($id)
     {
+        // Get the ID of the FIRST attempt for each user on this tryout
+        $firstAttemptIds = UserResult::where('tryout_id', $id)
+            ->selectRaw('MIN(id) as id')
+            ->groupBy('user_id')
+            ->pluck('id');
+
         // 1. Total Score (Desc)
         // 2. TKP (Desc)
         // 3. TIU (Desc)
         // 4. TWK (Desc)
         // 5. Time Taken (Asc)
         $leaderboard = UserResult::with('user:id,name')
-            ->where('tryout_id', $id)
+            ->whereIn('id', $firstAttemptIds)
             ->orderBy('total_score', 'desc')
             ->orderBy('score_tkp', 'desc')
             ->orderBy('score_tiu', 'desc')
@@ -211,100 +216,173 @@ class TryoutController extends Controller
     public function getUserAnalytics(Request $request)
     {
         $userId = $request->user()->id;
+        $tryoutIdFilter = $request->query('tryout_id', 'all');
 
-        $results = UserResult::where('user_id', $userId)
-            ->orderBy('created_at', 'asc')
-            ->get();
+        // Fetch available tryouts for the filter dropdown
+        $availableTryouts = \App\Models\UserResult::with('tryout:id,title')
+            ->where('user_id', $userId)
+            ->get()
+            ->pluck('tryout')
+            ->filter()
+            ->unique('id')
+            ->values()
+            ->toArray();
 
-        $totalTryouts = $results->count();
-        
-        if ($totalTryouts === 0) {
-            return response()->json([
-                'total_tryouts' => 0,
-                'avg_twk' => 0,
-                'avg_tiu' => 0,
-                'avg_tkp' => 0,
-                'pass_rate' => 0,
-                'history' => []
-            ]);
+        $cacheKey = "user_analytics_{$userId}";
+        if ($tryoutIdFilter && $tryoutIdFilter !== 'all') {
+            $cacheKey .= "_tryout_{$tryoutIdFilter}";
         }
 
-        $passedCount = $results->where('is_passed', true)->count();
-        $passRate = round(($passedCount / $totalTryouts) * 100);
+        $analytics = \Illuminate\Support\Facades\Cache::remember($cacheKey, 3600, function () use ($userId, $tryoutIdFilter) {
+            $query = UserResult::with('tryout:id,title')
+                ->where('user_id', $userId)
+                ->orderBy('created_at', 'asc');
 
-        $avgTwk = round($results->avg('score_twk'));
-        $avgTiu = round($results->avg('score_tiu'));
-        $avgTkp = round($results->avg('score_tkp'));
+            if ($tryoutIdFilter && $tryoutIdFilter !== 'all') {
+                $query->where('tryout_id', $tryoutIdFilter);
+            }
 
-        // Format history for Line Chart & Table
-        $history = $results->map(function ($result, $index) {
-            return [
-                'id' => $result->id,
-                'attempt' => 'Ujian ' . ($index + 1),
-                'total_score' => $result->total_score,
-                'score_twk' => $result->score_twk,
-                'score_tiu' => $result->score_tiu,
-                'score_tkp' => $result->score_tkp,
-                'is_passed' => $result->is_passed,
-                'date' => $result->created_at->format('d M Y, H:i')
-            ];
-        })->values();
+            $results = $query->get();
 
-        // Calculate Sub-Category Analytics
-        $tryoutIds = $results->pluck('tryout_id')->unique();
-        $questions = \App\Models\Question::whereIn('tryout_id', $tryoutIds)->get()->keyBy('id');
+            $totalTryouts = $results->count();
+            
+            if ($totalTryouts === 0) {
+                return [
+                    'total_tryouts' => 0,
+                    'avg_twk' => 0,
+                    'avg_tiu' => 0,
+                    'avg_tkp' => 0,
+                    'pass_rate' => 0,
+                    'history' => [],
+                    'all_subjects' => [],
+                    'weakest_subjects' => [],
+                    'strongest_subjects' => []
+                ];
+            }
 
-        $subCategoryStats = [];
+            $passedCount = $results->where('is_passed', true)->count();
+            $passRate = round(($passedCount / $totalTryouts) * 100);
 
-        foreach ($results as $result) {
-            $answers = is_string($result->answers) ? json_decode($result->answers, true) : $result->answers;
-            if (!is_array($answers)) continue;
+            $avgTwk = round($results->avg('score_twk'));
+            $avgTiu = round($results->avg('score_tiu'));
+            $avgTkp = round($results->avg('score_tkp'));
 
-            foreach ($answers as $qId => $ans) {
-                if (isset($questions[$qId])) {
-                    $q = $questions[$qId];
-                    if ($q->sub_category) {
-                        $sub = $q->sub_category;
-                        if (!isset($subCategoryStats[$sub])) {
-                            $subCategoryStats[$sub] = ['earned' => 0, 'max' => 0];
+            $history = $results->map(function ($result, $index) use ($tryoutIdFilter) {
+                $attemptName = 'Ujian ' . ($index + 1);
+                $tryoutName = $result->tryout ? $result->tryout->title : 'Unknown Tryout';
+                
+                return [
+                    'id' => $result->id,
+                    'tryout_id' => $result->tryout_id,
+                    'attempt' => $attemptName,
+                    'tryout_name' => $tryoutName,
+                    'total_score' => $result->total_score,
+                    'score_twk' => $result->score_twk,
+                    'score_tiu' => $result->score_tiu,
+                    'score_tkp' => $result->score_tkp,
+                    'is_passed' => $result->is_passed,
+                    'date' => $result->created_at->format('d M Y, H:i')
+                ];
+            })->values()->toArray();
+
+            // Calculate Sub-Category Analytics
+            $tryoutIds = $results->pluck('tryout_id')->unique();
+            
+            // Optimize: Only select required fields to save memory
+            $questions = \App\Models\Question::whereIn('tryout_id', $tryoutIds)
+                ->select('id', 'tryout_id', 'sub_category', 'score_a', 'score_b', 'score_c', 'score_d', 'score_e')
+                ->get()->keyBy('id');
+
+            $subCategoryStats = [];
+
+            foreach ($results as $result) {
+                $answers = is_string($result->answers) ? json_decode($result->answers, true) : $result->answers;
+                if (!is_array($answers)) continue;
+
+                foreach ($answers as $qId => $ans) {
+                    if (isset($questions[$qId])) {
+                        $q = $questions[$qId];
+                        if ($q->sub_category) {
+                            $sub = $q->sub_category;
+                            if (!isset($subCategoryStats[$sub])) {
+                                $subCategoryStats[$sub] = ['earned' => 0, 'max' => 0];
+                            }
+                            
+                            $scoreField = 'score_' . strtolower($ans);
+                            $points = $q->$scoreField ?? 0;
+
+                            $subCategoryStats[$sub]['earned'] += $points;
+                            $subCategoryStats[$sub]['max'] += 5;
                         }
-                        
-                        $scoreField = 'score_' . strtolower($ans);
-                        $points = $q->$scoreField ?? 0;
-
-                        $subCategoryStats[$sub]['earned'] += $points;
-                        $subCategoryStats[$sub]['max'] += 5;
                     }
                 }
             }
-        }
 
-        $subCategoryPercentages = [];
-        foreach ($subCategoryStats as $sub => $stat) {
-            if ($stat['max'] > 0) {
-                $subCategoryPercentages[] = [
-                    'name' => $sub,
-                    'percentage' => round(($stat['earned'] / $stat['max']) * 100)
-                ];
+            $subCategoryPercentages = [];
+            foreach ($subCategoryStats as $sub => $stat) {
+                if ($stat['max'] > 0) {
+                    $subCategoryPercentages[] = [
+                        'name' => $sub,
+                        'percentage' => round(($stat['earned'] / $stat['max']) * 100)
+                    ];
+                }
             }
-        }
 
-        usort($subCategoryPercentages, function($a, $b) {
-            return $a['percentage'] <=> $b['percentage'];
+            usort($subCategoryPercentages, function($a, $b) {
+                return $a['percentage'] <=> $b['percentage'];
+            });
+
+            $weakestSubjects = array_slice($subCategoryPercentages, 0, 3);
+            $strongestSubjects = array_reverse(array_slice($subCategoryPercentages, -3));
+
+            return [
+                'total_tryouts' => $totalTryouts,
+                'avg_twk' => $avgTwk,
+                'avg_tiu' => $avgTiu,
+                'avg_tkp' => $avgTkp,
+                'pass_rate' => $passRate,
+                'history' => $history,
+                'all_subjects' => $subCategoryPercentages,
+                'weakest_subjects' => $weakestSubjects,
+                'strongest_subjects' => $strongestSubjects
+            ];
         });
 
-        $weakestSubjects = array_slice($subCategoryPercentages, 0, 3);
-        $strongestSubjects = array_reverse(array_slice($subCategoryPercentages, -3));
+        $analytics['available_tryouts'] = $availableTryouts;
 
+        return response()->json($analytics);
+    }
+
+
+
+    public function getDashboard(Request $request)
+    {
+        $user = $request->user();
+        
+        // 1. Get User Analytics (Re-use logic but return array)
+        // Since getUserAnalytics returns a JsonResponse, we fetch original data
+        $analyticsRes = $this->getUserAnalytics($request)->getData(true);
+        
+        // 2. Get Tryouts (Re-use index logic)
+        $tryoutsRes = $this->index($request)->getData(true);
+        
         return response()->json([
-            'total_tryouts' => $totalTryouts,
-            'avg_twk' => $avgTwk,
-            'avg_tiu' => $avgTiu,
-            'avg_tkp' => $avgTkp,
-            'pass_rate' => $passRate,
-            'history' => $history,
-            'weakest_subjects' => $weakestSubjects,
-            'strongest_subjects' => $strongestSubjects
+            'user' => $user,
+            'analytics' => $analyticsRes,
+            'tryouts' => $tryoutsRes
         ]);
+    }
+
+    public function getPublicReviews()
+    {
+        $reviews = \App\Models\Review::with(['user:id,name', 'tryout:id,title'])
+            ->where('rating', '>=', 4)
+            ->whereNotNull('comment')
+            ->where('comment', '!=', '')
+            ->orderBy('created_at', 'desc')
+            ->limit(6)
+            ->get();
+            
+        return response()->json($reviews);
     }
 }
