@@ -19,20 +19,24 @@ class DatabaseSeeder extends Seeder
         // User::factory(10)->create();
 
         // Create Admin User
-        User::create([
-            'name' => 'Admin Taktik Ujian',
-            'email' => 'admin@taktikujian.com',
-            'password' => Hash::make('password'),
-            'is_admin' => true,
-        ]);
+        User::firstOrCreate(
+            ['email' => 'admin@taktikujian.com'],
+            [
+                'name' => 'Admin Taktik Ujian',
+                'password' => Hash::make('password'),
+                'is_admin' => true,
+            ]
+        );
 
         // Create Regular Test User
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
-            'password' => Hash::make('password'),
-            'is_admin' => false,
-        ]);
+        User::firstOrCreate(
+            ['email' => 'test@example.com'],
+            [
+                'name' => 'Test User',
+                'password' => Hash::make('password'),
+                'is_admin' => false,
+            ]
+        );
 
         $this->call([
             DummyDataSeeder::class
