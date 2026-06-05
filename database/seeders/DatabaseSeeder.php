@@ -16,30 +16,14 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
-
         // Create Admin User
         User::firstOrCreate(
-            ['email' => 'admin@taktikujian.com'],
+            ['email' => 'taktikujian@gmail.com'],
             [
                 'name' => 'Admin Taktik Ujian',
                 'password' => Hash::make('password'),
                 'is_admin' => true,
             ]
         );
-
-        // Create Regular Test User
-        User::firstOrCreate(
-            ['email' => 'test@example.com'],
-            [
-                'name' => 'Test User',
-                'password' => Hash::make('password'),
-                'is_admin' => false,
-            ]
-        );
-
-        $this->call([
-            DummyDataSeeder::class
-        ]);
     }
 }
