@@ -80,6 +80,7 @@ class AuthController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users,email,'.$user->id,
+            'phone_number' => 'nullable|string|max:20',
             'current_password' => 'nullable|string',
             'new_password' => 'nullable|string|min:8|confirmed',
         ]);
@@ -95,6 +96,9 @@ class AuthController extends Controller
 
         $user->name = $validated['name'];
         $user->email = $validated['email'];
+        if (isset($validated['phone_number'])) {
+            $user->phone_number = $validated['phone_number'];
+        }
         $user->save();
 
         return response()->json([
