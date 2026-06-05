@@ -10,6 +10,8 @@ use App\Http\Controllers\Api\CategoryController;
 
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/forgot-password', [\App\Http\Controllers\Api\PasswordResetController::class, 'sendResetLinkEmail']);
+Route::post('/reset-password', [\App\Http\Controllers\Api\PasswordResetController::class, 'reset']);
 
 Route::get('/public/reviews', [TryoutController::class, 'getPublicReviews']);
 Route::get('/public/bundles', [\App\Http\Controllers\BundleController::class, 'index']);
