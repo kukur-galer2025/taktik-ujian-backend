@@ -13,6 +13,10 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/forgot-password', [\App\Http\Controllers\Api\PasswordResetController::class, 'sendResetLinkEmail']);
 Route::post('/reset-password', [\App\Http\Controllers\Api\PasswordResetController::class, 'reset']);
 
+// Google Auth
+Route::get('/auth/google/redirect', [\App\Http\Controllers\Api\GoogleAuthController::class, 'redirectToGoogle']);
+Route::get('/auth/google/callback', [\App\Http\Controllers\Api\GoogleAuthController::class, 'handleGoogleCallback']);
+
 Route::get('/public/reviews', [TryoutController::class, 'getPublicReviews']);
 Route::get('/public/bundles', [\App\Http\Controllers\BundleController::class, 'index']);
 
